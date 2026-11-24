@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenSpace Piano Instrument</title>
+  <link rel="stylesheet" href="./web/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Connection & Hardware Bar -->
+    <header class="topbar">
+      <div class="brand">
+        <span id="osDot" class="status-dot offline" title="OpenSpace connection state"></span>
+        <div>
+          <h1>OpenSpace Piano</h1>
+          <p class="subtitle">Direct Web MIDI &rarr; WebSocket (:4682) Instrument</p>
+        </div>
+      </div>
+
+      <div class="toolbar-group">
+        <label class="field-inline">
+          <span>Host</span>
+          <input id="osHost" type="text" value="localhost" spellcheck="false" />
+        </label>
+        <label class="field-inline port-field">
+          <span>Port</span>
+          <input id="osPort" type="number" value="4682" min="1" max="65535" />
+        </label>
+        <label class="checkbox-pill" title="Use secure WebSocket (wss://)">
+          <input id="osTls" type="checkbox" />
+          <span>WSS</span>
+        </label>
+        <button id="connectBtn" class="btn btn-primary">Connect</button>
+        <span id="osConnBadge" class="badge">Offline</span>
+      </div>
+
+      <div class="toolbar-group">
+        <label class="field-inline">
+          <span>MIDI</span>
+          <select id="midiSelect">
+            <option value="all">Detecting MIDI...</option>
+          </select>
+        </label>
+        <button id="midiRefreshBtn" class="btn btn-ghost" title="Rescan MIDI devices">Scan</button>
+        <button id="audioMuteBtn" class="btn btn-ghost" title="Toggle built-in Web Audio piano">Sound: On</button>
+        <label class="field-inline vol-field" title="Master Synth Volume">
+          <span>Vol</span>
+          <input id="audioVol" type="range" min="0" max="1.2" step="0.02" value="0.8" />
+        </label>
+        <button id="panicBtn" class="btn btn-danger" title="Silence all voices and reset analyzer">Panic</button>
+      </div>
+    </header>
+
+    <!-- 88-Key Keyboard & Scrolling Roll -->
+    <section class="card keyboard-card">
+      <div class="keyboard-header">
+        <div class="kbd-stats">
+          <span class="stat-pill">Held <strong id="statHeld">0</strong></span>
+          <span class="stat-pill">Sustained <strong id="statSus">0</strong></span>
+          <span class="stat-pill">Notes <strong id="statNotes">0</strong></span>
+          <span class="stat-pill">Last <strong id="statLast">--</strong></span>
+        </div>
+        <div class="kbd-actions">
+          <span class="hint-text">QWERTY: Z..M (C3) · Q..I (C4) · Space = Sustain</span>
+          <button id="pedalBtn" class="btn btn-ghost">Sustain Pedal: Up</button>
+          <label class="checkbox-pill">
+            <input id="showRollChk" type="checkbox" checked />
+            <span>Piano Roll</span>
+          </label>
+          <button id="clearRollBtn" class="btn btn-ghost">Clear Roll</button>
+        </div>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="pianoCanvas"></canvas>
+      </div>
+    </section>
+
+    <!-- Telemetry & Live OpenSpace State -->
+    <section class="telemetry-grid">
+      <div class="card telemetry-card">
+        <div class="card-head">
+          <h2>Musical Analysis</h2>
+          <span id="bassBadge" class="badge accent">Bass: --</span>
+        </div>
+        <div class="meters-grid" id="metersGrid">
+          <div class="meter" data-key="energy"><span>Energy</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter" data-key="density"><span>Density</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter" data-key="loudness"><span>Loudness</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter" data-key="centroid"><span>Centroid</span><div class="bar"><i></i></div><em>0.50</em></div>
+          <div class="meter" data-key="spread"><span>Spread</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter" data-key="tension"><span>Tension</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter" data-key="polyphony"><span>Polyphony</span><div class="bar"><i></i></div><em>0.00</em></div>
+        </div>
+        <div class="bands-row">
+          <div class="meter band" data-key="bandLow"><span>Low (A0-B2)</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter band" data-key="bandMid"><span>Mid (C3-B4)</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter band" data-key="bandHigh"><span>High (C5-B5)</span><div class="bar"><i></i></div><em>0.00</em></div>
+          <div class="meter band" data-key="treble"><span>Treble (C6+)</span><div class="bar"><i></i></div><em>0.00</em></div>
+        </div>
+      </div>
+
+      <div class="card telemetry-card">
+        <div class="card-head">
+          <h2>OpenSpace State</h2>
+          <span id="boostBadge" class="badge">Size x1.0</span>
+        </div>
+        <div class="os-kv">
+          <div><span>Camera / Tour</span><strong id="osCameraState">waiting for notes</strong></div>
+          <div><span>Focus Distance</span><strong id="osDist">--</strong></div>
+          <div><span>Simulation Speed</span><strong id="osTimeRate">--</strong></div>
+          <div><span>Layers Active</span><strong id="osLayersCount">0 / 80</strong></div>
+          <div><span>Packets Sent</span><strong id="osTxCount">0</strong></div>
+        </div>
+        <details class="layer-drawer">
+          <summary>Inspect 80 Scene Layers</summary>
+          <div id="layerMatrix" class="layer-matrix"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Main Control Columns -->
+    <main class="controls-grid">
+      <!-- Column 1: OpenSpace Mode & Mapping -->
+      <section class="card control-card">
+        <div class="card-head">
+          <h2>OpenSpace Mapping</h2>
+        </div>
+
+        <div class="segmented" id="modePresetGroup" role="group" aria-label="Operating mode">
+          <button type="button" class="seg-btn active" data-mode="normal">Normal</button>
+          <button type="button" class="seg-btn" data-mode="slow">Slow</button>
+          <button type="button" class="seg-btn" data-mode="time-only">Time-Only</button>
+        </div>
+
+        <div class="toggles-grid">
+          <label class="toggle-item"><input id="cfgCamera" type="checkbox" checked /><span>Camera Motion</span></label>
+          <label class="toggle-item"><input id="cfgLayers" type="checkbox" checked /><span>Scene Layers</span></label>
+          <label class="toggle-item"><input id="cfgSizes" type="checkbox" checked /><span>Point Sizes</span></label>
+          <label class="toggle-item"><input id="cfgTime" type="checkbox" /><span>Drive Time Speed</span></label>
+          <label class="toggle-item"><input id="cfgTour" type="checkbox" checked /><span>Planet Tour</span></label>
+          <label class="toggle-item"><input id="cfgBass" type="checkbox" checked /><span>Bass Steering</span></label>
+          <label class="toggle-item"><input id="cfgHideLabels" type="checkbox" checked /><span>Hide Scene Labels</span></label>
+          <label class="toggle-item"><input id="cfgDryRun" type="checkbox" /><span>Dry Run (No Socket)</span></label>
+        </div>
+
+        <div class="action-row">
+          <button id="resetLayersBtn" class="btn btn-ghost">Reset Layers</button>
+          <button id="restoreOsBtn" class="btn btn-ghost">Restore Time &amp; Retarget</button>
+        </div>
+
+        <div class="focus-lock-row">
+          <label class="field-stack">
+            <span>Manual Focus Lock</span>
+            <select id="lockSelect">
+              <option value="">None (Tour / Bass Steering)</option>
+              <option value="Earth">Earth</option>
+              <option value="Moon">Moon</option>
+              <option value="Sun">Sun</option>
+              <option value="Mercury">Mercury</option>
+              <option value="Venus">Venus</option>
+              <option value="Mars">Mars</option>
+              <option value="Jupiter">Jupiter</option>
+              <option value="Saturn">Saturn</option>
+              <option value="Uranus">Uranus</option>
+              <option value="Neptune">Neptune</option>
+              <option value="Pluto">Pluto</option>
+            </select>
+          </label>
+          <button id="applyLockBtn" class="btn btn-ghost">Lock</button>
+          <button id="releaseLockBtn" class="btn btn-ghost">Release</button>
+        </div>
+
+        <details class="advanced-panel">
+          <summary>Advanced Bridge Tuning</summary>
+          <div class="tuning-grid">
+            <label><span>Truck Gain</span><input id="cfgTruckGain" type="number" step="0.1" value="2.0" /></label>
+            <label><span>Elevation Gain</span><input id="cfgElevGain" type="number" step="0.02" value="0.5" /></label>
+            <label><span>Roll Gain</span><input id="cfgRollGain" type="number" step="0.01" value="0.25" /></label>
+            <label><span>Retarget (s)</span><input id="cfgRetarget" type="number" step="1" min="0" value="20" /></label>
+            <label><span>Layer Pace (s)</span><input id="cfgLayerPace" type="number" step="0.5" min="0.5" value="5.0" /></label>
+            <label><span>Silence Hold (s)</span><input id="cfgHold" type="number" step="1" min="1" value="10" /></label>
+            <label><span>Bass Split (MIDI)</span><input id="cfgBassSplit" type="number" step="1" min="21" max="72" value="35" /></label>
+            <label><span>Tour Midpoint</span><input id="cfgTourMidpoint" type="number" step="0.05" min="0" max="0.95" value="0.5" /></label>
+            <label><span>Drift Time (s)</span><input id="cfgDriftTime" type="number" step="1" min="0" value="20" /></label>
+            <label><span>Time Min (dt)</span><input id="cfgTimeMin" type="number" step="0.5" min="0.01" value="1" /></label>
+            <label><span>Time Max (dt)</span><input id="cfgTimeMax" type="number" step="1000" min="1" value="604800" /></label>
+            <label><span>Time Gain</span><input id="cfgTimeGain" type="number" step="0.1" min="0.1" value="1.2" /></label>
+            <label><span>Time Curve</span><input id="cfgTimeCurve" type="number" step="0.05" min="0.1" value="0.8" /></label>
+            <label><span>Time Build (s)</span><input id="cfgTimeBuild" type="number" step="5" min="0" value="60" /></label>
+            <label><span>Time Decay (s)</span><input id="cfgTimeDecay" type="number" step="5" min="1" value="30" /></label>
+            <label><span>Treble Boost</span><input id="cfgTrebleBoost" type="number" step="0.1" min="0" value="1.6" /></label>
+          </div>
+        </details>
+      </section>
+
+      <!-- Column 2: Playback & Installation -->
+      <section class="card control-card">
+        <div class="card-head">
+          <h2>Playback &amp; Installation</h2>
+          <span id="playBadge" class="badge">Idle</span>
+        </div>
+
+        <div class="subpanel">
+          <div class="subpanel-head">
+            <h3>Built-in 2-Min Demo</h3>
+            <label class="field-inline">
+              <span>BPM</span>
+              <input id="demoTempo" type="number" min="30" max="160" value="72" />
+            </label>
+          </div>
+          <div class="action-row">
+            <button id="demoPlayBtn" class="btn btn-primary">Play Demo</button>
+            <button id="demoStopBtn" class="btn btn-ghost">Stop Demo</button>
+          </div>
+        </div>
+
+        <div class="subpanel">
+          <div class="subpanel-head">
+            <h3>Rolling Playlist (Installation)</h3>
+            <label class="checkbox-pill">
+              <input id="rdYieldChk" type="checkbox" checked />
+              <span>Yield to Player</span>
+            </label>
+          </div>
+          <div class="action-row">
+            <button id="rdStartBtn" class="btn btn-primary">Start Rolling</button>
+            <button id="rdSkipBtn" class="btn btn-ghost">Skip</button>
+            <button id="rdStopBtn" class="btn btn-ghost">Stop</button>
+            <label class="field-inline">
+              <span>Idle (s)</span>
+              <input id="rdIdleInput" type="number" min="1" max="120" step="1" value="5" />
+            </label>
+          </div>
+          <p id="rdStatusText" class="muted-note">Cycles all 7 bundled scores; fades out smoothly when you touch a key.</p>
+        </div>
+
+        <div class="subpanel">
+          <div class="subpanel-head">
+            <h3>Single Score / Custom .mid</h3>
+            <label class="checkbox-pill">
+              <input id="midiLoopChk" type="checkbox" />
+              <span>Loop</span>
+            </label>
+          </div>
+          <div class="score-select-row">
+            <select id="songSelect"></select>
+            <button id="songPlayBtn" class="btn btn-primary">Play</button>
+            <button id="songStopBtn" class="btn btn-ghost">Stop</button>
+          </div>
+          <div class="slider-row">
+            <label>Speed <span id="midiRateVal">1.00x</span></label>
+            <input id="midiRate" type="range" min="0.25" max="2.0" step="0.05" value="1.0" />
+            <label class="checkbox-pill" title="FlyMeToTheMoon pins camera to Moon on play">
+              <input id="autoLockChk" type="checkbox" checked />
+              <span>Auto Focus Lock</span>
+            </label>
+          </div>
+
+          <div id="dropZone" class="dropzone">
+            <input id="fileInput" type="file" accept=".mid,.midi,.score" hidden />
+            <p>Drop a <strong>.mid</strong> or <strong>.score</strong> file here, or <button id="browseFileBtn" type="button" class="link-btn">browse</button></p>
+            <div class="drop-options">
+              <label class="checkbox-pill"><input id="midiDropBass" type="checkbox" /><span>Drop bass 1 oct (&lt;C4)</span></label>
+              <label class="checkbox-pill"><input id="midiKeepDrums" type="checkbox" /><span>Keep Ch 10 drums</span></label>
+            </div>
+            <p id="scoreStatsText" class="muted-note"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Column 3: Synth Timbre & Activity Log -->
+      <section class="card control-card">
+        <div class="card-head">
+          <h2>Piano Synth &amp; Log</h2>
+        </div>
+
+        <div class="subpanel">
+          <h3>Web Audio Piano Voice</h3>
+          <div class="synth-sliders">
+            <label class="slider-item">
+              <span>Room Mix <em id="valBodyMix">0.20</em></span>
+              <input id="synBodyMix" type="range" min="0" max="0.8" step="0.02" value="0.20" />
+            </label>
+            <label class="slider-item">
+              <span>Decay (c1) <em id="valC1">1.00</em></span>
+              <input id="synC1" type="range" min="0.4" max="2.0" step="0.05" value="1.0" />
+            </label>
+            <label class="slider-item">
+              <span>Brightness (c3) <em id="valC3">1.00</em></span>
+              <input id="synC3" type="range" min="0.4" max="2.0" step="0.05" value="1.0" />
+            </label>
+            <label class="slider-item">
+              <span>Hammer Pos <em id="valPos">0.13</em></span>
+              <input id="synPos" type="range" min="0.05" max="0.30" step="0.01" value="0.13" />
+            </label>
+            <label class="slider-item">
+              <span>Unison Detune <em id="valDetune">1.00</em></span>
+              <input id="synDetune" type="range" min="0" max="3.0" step="0.1" value="1.0" />
+            </label>
+          </div>
+        </div>
+
+        <div class="subpanel log-panel">
+          <div class="subpanel-head">
+            <h3>Activity Log</h3>
+            <div class="log-controls">
+              <label class="checkbox-pill">
+                <input id="verboseLuaChk" type="checkbox" />
+                <span>Verbose Lua</span>
+              </label>
+              <button id="clearLogBtn" class="btn btn-ghost">Clear</button>
+            </div>
+          </div>
+          <div id="logConsole" class="log-console" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="./web/app.js"></script>
+</body>
+</html>
