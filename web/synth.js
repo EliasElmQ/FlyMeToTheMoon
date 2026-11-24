@@ -1,5 +1,5 @@
-// Web Audio polyphonic piano synthesizer modeled on \kbPiano and \kbBody
-// in openspace_piano.scd (11-partial additive timbre + hammer click + soundboard EQ/reverb).
+// Web Audio polyphonic synthesizer with 8 selectable instruments modeled around
+// \kbPiano and \kbBody from openspace_piano.scd (zero external assets).
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
@@ -9,11 +9,63 @@ function midiToFreq(note) {
   return 440.0 * Math.pow(2.0, (note - 69) / 12.0);
 }
 
+export const INSTRUMENTS = [
+  {
+    id: "piano",
+    name: "Acoustic Piano",
+    category: "Keys",
+    defaults: { bodyMix: 0.20, bodyRoom: 0.50, c1Scale: 1.0, c3Scale: 1.0, pos: 0.13, detune: 1.0 },
+  },
+  {
+    id: "epiano",
+    name: "Electric Piano (Tine)",
+    category: "Keys",
+    defaults: { bodyMix: 0.28, bodyRoom: 0.55, c1Scale: 0.85, c3Scale: 1.15, pos: 0.18, detune: 1.4 },
+  },
+  {
+    id: "celesta",
+    name: "Celesta / Starlight Bells",
+    category: "Mallet",
+    defaults: { bodyMix: 0.45, bodyRoom: 0.72, c1Scale: 0.75, c3Scale: 0.85, pos: 0.10, detune: 0.6 },
+  },
+  {
+    id: "pad",
+    name: "Cosmic Space Pad",
+    category: "Pad",
+    defaults: { bodyMix: 0.55, bodyRoom: 0.85, c1Scale: 0.70, c3Scale: 1.25, pos: 0.20, detune: 2.2 },
+  },
+  {
+    id: "organ",
+    name: "Cathedral Pipe Organ",
+    category: "Organ",
+    defaults: { bodyMix: 0.42, bodyRoom: 0.78, c1Scale: 1.0, c3Scale: 1.05, pos: 0.15, detune: 0.9 },
+  },
+  {
+    id: "harpsichord",
+    name: "Harpsichord",
+    category: "Pluck",
+    defaults: { bodyMix: 0.18, bodyRoom: 0.40, c1Scale: 1.35, c3Scale: 0.72, pos: 0.08, detune: 0.4 },
+  },
+  {
+    id: "harp",
+    name: "Concert Harp",
+    category: "Pluck",
+    defaults: { bodyMix: 0.36, bodyRoom: 0.68, c1Scale: 0.90, c3Scale: 1.10, pos: 0.19, detune: 0.5 },
+  },
+  {
+    id: "synth",
+    name: "Analog Poly Synth",
+    category: "Synth",
+    defaults: { bodyMix: 0.30, bodyRoom: 0.60, c1Scale: 0.95, c3Scale: 0.90, pos: 0.12, detune: 1.8 },
+  },
+];
+
 export class PianoSynth {
   constructor(opts = {}) {
+    this.instrument = opts.instrument ?? "piano";
     this.muted = Boolean(opts.muted ?? false);
     this.volume = opts.volume ?? 0.8;
-    this.pos = opts.pos ?? 0.13;       // hammer strike point (0.06..0.25)
+    this.pos = opts.pos ?? 0.13;       // strike/pluck point (0.05..0.30)
     this.c1Scale = opts.c1Scale ?? 1.0; // decay multiplier (below 1 = longer)
     this.c3Scale = opts.c3Scale ?? 1.0; // brightness multiplier (below 1 = brighter)
     this.detune = opts.detune ?? 1.0;   // unison detuning scale
@@ -43,6 +95,15 @@ export class PianoSynth {
       typeof window !== "undefined" &&
       Boolean(window.AudioContext || window.webkitAudioContext)
     );
+  }
+
+  setInstrument(id, applyDefaults = true) {
+    const preset = INSTRUMENTS.find((item) => item.id === id) || INSTRUMENTS[0];
+    this.instrument = preset.id;
+    if (applyDefaults && preset.defaults) {
+      this.setTimbre(preset.defaults);
+    }
+    return preset;
   }
 
   ensureContext() {
@@ -119,7 +180,7 @@ export class PianoSynth {
     limiter.connect(this.masterGain);
     this.masterGain.connect(ctx.destination);
 
-    // Pre-generate 0.05s white-noise hammer transient buffer
+    // Pre-generate 0.05s white-noise hammer/pluck transient buffer
     const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.05));
     const buf = ctx.createBuffer(1, nLen, ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -135,7 +196,7 @@ export class PianoSynth {
   }
 
   _masterCutoff() {
-    return clamp(4200 / Math.max(0.2, this.c3Scale), 700, 14000);
+    return clamp(4600 / Math.max(0.2, this.c3Scale), 700, 15000);
   }
 
   _applyMasterParams() {
@@ -171,16 +232,51 @@ export class PianoSynth {
     this.convolver.buffer = ir;
   }
 
-  _getWave(pos) {
-    const key = Math.round(clamp(pos, 0.03, 0.45) * 100);
+  _getWave(kind, pos) {
+    const pKey = Math.round(clamp(pos, 0.03, 0.45) * 100);
+    const key = `${kind}:${pKey}`;
     if (this.waveCache.has(key)) return this.waveCache.get(key);
-    const real = new Float32Array(12);
-    const imag = new Float32Array(12);
-    const p = key / 100;
-    for (let n = 1; n <= 11; n++) {
-      const strike = 0.35 + 0.65 * Math.abs(Math.sin(Math.PI * n * p));
-      imag[n] = (1 / Math.pow(n, 1.35)) * strike;
+
+    const real = new Float32Array(13);
+    const imag = new Float32Array(13);
+    const p = pKey / 100;
+
+    if (kind === "organ") {
+      // Pipe / drawbar harmonic blend (1, 2, 3, 4, 6, 8)
+      const bright = clamp(1.2 - p * 3.0, 0.2, 1.0);
+      imag[1] = 1.0;
+      imag[2] = 0.72;
+      imag[3] = 0.45 * bright;
+      imag[4] = 0.38 * bright;
+      imag[6] = 0.22 * bright;
+      imag[8] = 0.16 * bright;
+    } else if (kind === "harpsichord") {
+      for (let n = 1; n <= 12; n++) {
+        const pluck = 0.4 + 0.6 * Math.abs(Math.sin(Math.PI * n * p));
+        imag[n] = (1 / Math.pow(n, 0.85)) * pluck;
+      }
+    } else if (kind === "harp") {
+      for (let n = 1; n <= 10; n++) {
+        const pluck = 0.45 + 0.55 * Math.abs(Math.sin(Math.PI * n * p));
+        imag[n] = (1 / Math.pow(n, 1.55)) * pluck;
+      }
+    } else if (kind === "saw") {
+      for (let n = 1; n <= 12; n++) {
+        const edge = 0.55 + 0.45 * Math.abs(Math.sin(Math.PI * n * p));
+        imag[n] = (1 / n) * edge;
+      }
+    } else if (kind === "pad") {
+      for (let n = 1; n <= 10; n++) {
+        imag[n] = (1 / Math.pow(n, 1.45)) * (n % 2 === 1 ? 1.0 : 0.55);
+      }
+    } else {
+      // Default piano 11-partial strike spectrum
+      for (let n = 1; n <= 11; n++) {
+        const strike = 0.35 + 0.65 * Math.abs(Math.sin(Math.PI * n * p));
+        imag[n] = (1 / Math.pow(n, 1.35)) * strike;
+      }
     }
+
     const wave = this.ctx.createPeriodicWave(real, imag, { disableNormalization: false });
     this.waveCache.set(key, wave);
     return wave;
@@ -214,6 +310,229 @@ export class PianoSynth {
     this.ensureContext();
   }
 
+  _addNoiseTransient(ctx, targetNode, now, filterType, filterFreq, gainAmt, durSec, allNodes, auxGains) {
+    if (!this.noiseBuffer || gainAmt <= 0) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const flt = ctx.createBiquadFilter();
+    flt.type = filterType;
+    flt.frequency.value = filterFreq;
+    const g = ctx.createGain();
+    g.gain.value = 0.0001;
+    g.gain.setValueAtTime(gainAmt, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + durSec);
+
+    src.connect(flt);
+    flt.connect(g);
+    g.connect(targetNode);
+
+    src.start(now);
+    src.stop(now + durSec + 0.015);
+    allNodes.push(src, flt, g);
+    auxGains.push(g);
+  }
+
+  _buildVoiceGraph(ctx, num, freq, v, amp, now) {
+    const baseDecay = (7.0 * clamp(400.0 / (freq + 120.0), 0.3, 3.5)) / Math.max(0.15, this.c1Scale);
+    const brightScale = Math.max(0.2, this.c3Scale);
+
+    const voiceGain = ctx.createGain();
+    voiceGain.gain.value = 0.0001;
+
+    const toneFilter = ctx.createBiquadFilter();
+    toneFilter.type = "lowpass";
+
+    const panner = ctx.createStereoPanner();
+    panner.pan.setValueAtTime(clamp(((num - 60 + 39) / 87) * 1.2 - 0.6, -0.6, 0.6), now);
+
+    toneFilter.connect(voiceGain);
+    voiceGain.connect(panner);
+    panner.connect(this.busIn);
+
+    const oscNodes = [];
+    const auxGains = [];
+    const allNodes = [toneFilter, voiceGain, panner];
+
+    const addOsc = ({ freqHz, detuneCents = 0, waveKind = null, type = "sine", gainAmt = 0.5 }) => {
+      const osc = ctx.createOscillator();
+      if (waveKind) {
+        osc.setPeriodicWave(this._getWave(waveKind, this.pos));
+      } else {
+        osc.type = type;
+      }
+      osc.frequency.setValueAtTime(freqHz, now);
+      if (detuneCents !== 0) {
+        osc.detune.setValueAtTime(detuneCents, now);
+      }
+      const g = ctx.createGain();
+      g.gain.value = gainAmt;
+      osc.connect(g);
+      g.connect(toneFilter);
+      osc.start(now);
+      oscNodes.push(osc);
+      allNodes.push(osc, g);
+      return osc;
+    };
+
+    let releaseSec = 0.35;
+    let autoStopSec = baseDecay;
+    let peakAmp = amp;
+
+    if (this.instrument === "epiano") {
+      // FM tine electric piano
+      const decay = baseDecay * 1.15;
+      autoStopSec = decay;
+      releaseSec = 0.42;
+      peakAmp = amp * 0.95;
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.005);
+      voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0005, peakAmp * 0.25), now + decay * 0.4);
+      voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+
+      toneFilter.frequency.setValueAtTime(clamp((freq * 7.5) / brightScale, 700, 14000), now);
+      toneFilter.frequency.exponentialRampToValueAtTime(clamp(freq * 1.6, 260, 3600), now + Math.min(decay, 2.4));
+
+      const carrier = addOsc({ freqHz: freq, type: "sine", gainAmt: 0.72 });
+      addOsc({ freqHz: freq, detuneCents: this.detune * 2.4, type: "sine", gainAmt: 0.28 });
+
+      // Decaying FM tine bell modulator
+      const modOsc = ctx.createOscillator();
+      modOsc.type = "sine";
+      modOsc.frequency.setValueAtTime(freq * 7.0, now);
+      const modGain = ctx.createGain();
+      modGain.gain.value = 0.0001;
+      const fmDepth = clamp(freq * (1.8 * v + 0.25) / brightScale, 20, 4500);
+      modGain.gain.setValueAtTime(fmDepth, now);
+      modGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22 / Math.max(0.2, this.c1Scale));
+      modOsc.connect(modGain);
+      modGain.connect(carrier.frequency);
+      modOsc.start(now);
+      oscNodes.push(modOsc);
+      auxGains.push(modGain);
+      allNodes.push(modOsc, modGain);
+
+      this._addNoiseTransient(ctx, toneFilter, now, "bandpass", 850, 0.14 * v, 0.02, allNodes, auxGains);
+    } else if (this.instrument === "celesta") {
+      const decay = baseDecay * 0.9;
+      autoStopSec = decay;
+      releaseSec = 0.55;
+      peakAmp = amp * 0.9;
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.004);
+      voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0005, peakAmp * 0.22), now + decay * 0.35);
+      voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+
+      toneFilter.frequency.setValueAtTime(clamp((freq * 10.0) / brightScale, 1200, 16000), now);
+      toneFilter.frequency.exponentialRampToValueAtTime(clamp(freq * 2.2, 400, 6000), now + Math.min(decay, 2.0));
+
+      addOsc({ freqHz: freq, type: "sine", gainAmt: 0.62 });
+      addOsc({ freqHz: freq * 2.756, detuneCents: this.detune * 0.8, type: "sine", gainAmt: 0.24 });
+      addOsc({ freqHz: freq * 4.0, detuneCents: -this.detune * 1.1, type: "sine", gainAmt: 0.14 });
+      this._addNoiseTransient(ctx, toneFilter, now, "bandpass", 2400, 0.16 * v, 0.022, allNodes, auxGains);
+    } else if (this.instrument === "pad") {
+      autoStopSec = 25.0;
+      releaseSec = 1.4;
+      peakAmp = amp * 0.72;
+      const atk = 0.38 / Math.max(0.35, this.c1Scale);
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + atk);
+
+      toneFilter.frequency.setValueAtTime(clamp((freq * 2.2) / brightScale, 350, 5000), now);
+      toneFilter.frequency.exponentialRampToValueAtTime(clamp((freq * 6.5) / brightScale, 600, 12000), now + atk * 1.8);
+
+      addOsc({ freqHz: freq, waveKind: "pad", gainAmt: 0.40 });
+      addOsc({ freqHz: freq, detuneCents: this.detune * 6.0, waveKind: "pad", gainAmt: 0.30 });
+      addOsc({ freqHz: freq, detuneCents: -this.detune * 6.0, waveKind: "pad", gainAmt: 0.30 });
+    } else if (this.instrument === "organ") {
+      autoStopSec = 25.0;
+      releaseSec = 0.18;
+      peakAmp = amp * 0.74;
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.015);
+
+      toneFilter.frequency.setValueAtTime(clamp((freq * 8.5) / brightScale, 900, 14000), now);
+
+      addOsc({ freqHz: freq, waveKind: "organ", gainAmt: 0.52 });
+      addOsc({ freqHz: freq * 0.5, type: "sine", gainAmt: 0.26 });
+      addOsc({ freqHz: freq, detuneCents: this.detune * 2.2, waveKind: "organ", gainAmt: 0.22 });
+    } else if (this.instrument === "harpsichord") {
+      const decay = baseDecay * 0.65;
+      autoStopSec = decay;
+      releaseSec = 0.12;
+      peakAmp = amp * 0.92;
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.002);
+      voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0005, peakAmp * 0.22), now + decay * 0.4);
+      voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+
+      toneFilter.frequency.setValueAtTime(clamp((freq * 12.0) / brightScale, 1500, 16500), now);
+      toneFilter.frequency.exponentialRampToValueAtTime(clamp(freq * 2.0, 350, 5000), now + Math.min(decay * 0.55, 1.8));
+
+      addOsc({ freqHz: freq, waveKind: "harpsichord", gainAmt: 0.76 });
+      addOsc({ freqHz: freq * 2.0, detuneCents: this.detune * 1.5, waveKind: "harpsichord", gainAmt: 0.24 });
+      this._addNoiseTransient(ctx, toneFilter, now, "bandpass", 2200, 0.25 * v, 0.018, allNodes, auxGains);
+    } else if (this.instrument === "harp") {
+      const decay = baseDecay * 0.95;
+      autoStopSec = decay;
+      releaseSec = 0.65;
+      peakAmp = amp * 0.95;
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.006);
+      voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0005, peakAmp * 0.20), now + decay * 0.42);
+      voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+
+      toneFilter.frequency.setValueAtTime(clamp((freq * 7.0) / brightScale, 750, 12000), now);
+      toneFilter.frequency.exponentialRampToValueAtTime(clamp(freq * 1.3, 220, 3200), now + Math.min(decay, 2.5));
+
+      addOsc({ freqHz: freq, waveKind: "harp", gainAmt: 0.68 });
+      addOsc({ freqHz: freq, detuneCents: this.detune * 1.1, waveKind: "harp", gainAmt: 0.32 });
+      this._addNoiseTransient(ctx, toneFilter, now, "lowpass", 950, 0.14 * v, 0.024, allNodes, auxGains);
+    } else if (this.instrument === "synth") {
+      autoStopSec = 25.0;
+      releaseSec = 0.35;
+      peakAmp = amp * 0.85;
+      const sustainAmp = Math.max(0.0005, peakAmp * 0.55);
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.008);
+      voiceGain.gain.exponentialRampToValueAtTime(sustainAmp, now + 0.28 / Math.max(0.2, this.c1Scale));
+
+      toneFilter.Q.value = 2.2;
+      toneFilter.frequency.setValueAtTime(clamp((freq * (4.0 + 8.0 * v)) / brightScale, 700, 15000), now);
+      toneFilter.frequency.exponentialRampToValueAtTime(clamp((freq * 2.8) / brightScale, 320, 4800), now + 0.45 / Math.max(0.2, this.c1Scale));
+
+      addOsc({ freqHz: freq, detuneCents: -this.detune * 4.5, waveKind: "saw", gainAmt: 0.50 });
+      addOsc({ freqHz: freq, detuneCents: this.detune * 4.5, waveKind: "saw", gainAmt: 0.50 });
+    } else {
+      // Acoustic Piano (default)
+      autoStopSec = baseDecay;
+      releaseSec = 0.35;
+      peakAmp = amp;
+
+      voiceGain.gain.setValueAtTime(0.0001, now);
+      voiceGain.gain.linearRampToValueAtTime(peakAmp, now + 0.004);
+      voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0005, peakAmp * 0.18), now + baseDecay * 0.45);
+      voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + baseDecay);
+
+      const startCut = clamp((freq * 9.0) / brightScale, 800, 16000);
+      const endCut = clamp(freq * 1.4, 220, 4000);
+      toneFilter.frequency.setValueAtTime(startCut, now);
+      toneFilter.frequency.exponentialRampToValueAtTime(endCut, now + Math.min(baseDecay, 3.0));
+
+      addOsc({ freqHz: freq, waveKind: "piano", gainAmt: 0.65 });
+      addOsc({ freqHz: freq, detuneCents: this.detune * 1.8, waveKind: "piano", gainAmt: 0.35 });
+      this._addNoiseTransient(ctx, toneFilter, now, "highpass", 1400, 0.22 * v, 0.032, allNodes, auxGains);
+    }
+
+    return { voiceGain, oscNodes, auxGains, allNodes, releaseSec, autoStopSec, peakAmp };
+  }
+
   noteOn(num, vel = 0.7) {
     const v = clamp(Number(vel) || 0, 0, 1);
     if (v <= 0) {
@@ -243,69 +562,10 @@ export class PianoSynth {
 
     const now = ctx.currentTime;
     const freq = midiToFreq(num);
-    const decay = (7.0 * clamp(400.0 / (freq + 120.0), 0.3, 3.5)) / Math.max(0.15, this.c1Scale);
     const amp = (v * v * 0.9 + 0.05) * 0.32;
 
-    const voiceGain = ctx.createGain();
-    voiceGain.gain.value = 0.0001;
-    voiceGain.gain.setValueAtTime(0.0001, now);
-    voiceGain.gain.linearRampToValueAtTime(amp, now + 0.004);
-    voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0005, amp * 0.18), now + decay * 0.45);
-    voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + decay);
-
-    const toneFilter = ctx.createBiquadFilter();
-    toneFilter.type = "lowpass";
-    const startCut = clamp((freq * 9.0) / Math.max(0.2, this.c3Scale), 800, 16000);
-    const endCut = clamp(freq * 1.4, 220, 4000);
-    toneFilter.frequency.setValueAtTime(startCut, now);
-    toneFilter.frequency.exponentialRampToValueAtTime(endCut, now + Math.min(decay, 3.0));
-
-    const wave = this._getWave(this.pos);
-    const osc1 = ctx.createOscillator();
-    osc1.setPeriodicWave(wave);
-    osc1.frequency.setValueAtTime(freq, now);
-
-    const osc2 = ctx.createOscillator();
-    osc2.setPeriodicWave(wave);
-    osc2.frequency.setValueAtTime(freq, now);
-    osc2.detune.setValueAtTime(this.detune * 1.8, now);
-
-    const osc1Gain = ctx.createGain();
-    osc1Gain.gain.value = 0.65;
-    const osc2Gain = ctx.createGain();
-    osc2Gain.gain.value = 0.35;
-
-    // Hammer noise click
-    const hammer = ctx.createBufferSource();
-    hammer.buffer = this.noiseBuffer;
-    const hammerHp = ctx.createBiquadFilter();
-    hammerHp.type = "highpass";
-    hammerHp.frequency.value = 1400;
-    const hammerGain = ctx.createGain();
-    hammerGain.gain.value = 0.0001;
-    hammerGain.gain.setValueAtTime(0.22 * v, now);
-    hammerGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.032);
-
-    const panner = ctx.createStereoPanner();
-    panner.pan.setValueAtTime(clamp(((num - 60 + 39) / 87) * 1.2 - 0.6, -0.6, 0.6), now);
-
-    osc1.connect(osc1Gain);
-    osc2.connect(osc2Gain);
-    osc1Gain.connect(toneFilter);
-    osc2Gain.connect(toneFilter);
-
-    hammer.connect(hammerHp);
-    hammerHp.connect(hammerGain);
-    hammerGain.connect(toneFilter);
-
-    toneFilter.connect(voiceGain);
-    voiceGain.connect(panner);
-    panner.connect(this.busIn);
-
-    osc1.start(now);
-    osc2.start(now);
-    hammer.start(now);
-    hammer.stop(now + 0.045);
+    const { voiceGain, oscNodes, auxGains, allNodes, releaseSec, autoStopSec, peakAmp } =
+      this._buildVoiceGraph(ctx, num, freq, v, amp, now);
 
     let stopped = false;
     let oscStopped = false;
@@ -316,18 +576,7 @@ export class PianoSynth {
         clearTimeout(autoStopTimer);
         autoStopTimer = null;
       }
-      for (const node of [
-        osc1,
-        osc2,
-        osc1Gain,
-        osc2Gain,
-        hammer,
-        hammerHp,
-        hammerGain,
-        toneFilter,
-        voiceGain,
-        panner,
-      ]) {
+      for (const node of allNodes) {
         try {
           node.disconnect();
         } catch {
@@ -339,7 +588,9 @@ export class PianoSynth {
       }
     };
 
-    osc1.onended = cleanup;
+    if (oscNodes[0]) {
+      oscNodes[0].onended = cleanup;
+    }
 
     const handle = {
       stop: (when = ctx.currentTime, fast = false) => {
@@ -350,24 +601,28 @@ export class PianoSynth {
         if (stopped) return;
         stopped = true;
         const stopAt = Math.max(ctx.currentTime, Number.isFinite(when) ? when : ctx.currentTime);
-        const release = fast ? 0.025 : 0.35;
+        const release = fast ? 0.025 : releaseSec;
         try {
-          hammerGain.gain.cancelScheduledValues(stopAt);
-          hammerGain.gain.setValueAtTime(0.0001, stopAt);
+          for (const g of auxGains) {
+            g.gain.cancelScheduledValues(stopAt);
+            g.gain.setValueAtTime(0.0001, stopAt);
+          }
 
           if (typeof voiceGain.gain.cancelAndHoldAtTime === "function") {
             voiceGain.gain.cancelAndHoldAtTime(stopAt);
           } else {
             voiceGain.gain.cancelScheduledValues(stopAt);
-            const safeCur = Math.min(amp, Math.max(0.0001, voiceGain.gain.value));
+            const safeCur = Math.min(peakAmp, Math.max(0.0001, voiceGain.gain.value));
             voiceGain.gain.setValueAtTime(safeCur, stopAt);
           }
           voiceGain.gain.setTargetAtTime(0.0001, stopAt, release / 4.5);
 
           if (!oscStopped) {
             oscStopped = true;
-            osc1.stop(stopAt + release + 0.05);
-            osc2.stop(stopAt + release + 0.05);
+            const oscEnd = stopAt + release + 0.05;
+            for (const osc of oscNodes) {
+              osc.stop(oscEnd);
+            }
           }
         } catch {
           cleanup();
@@ -380,7 +635,7 @@ export class PianoSynth {
       if (!stopped) {
         handle.stop(ctx.currentTime, true);
       }
-    }, Math.ceil((decay + 0.08) * 1000));
+    }, Math.ceil((autoStopSec + 0.08) * 1000));
     autoStopTimer?.unref?.();
 
     this.voices.set(num, handle);

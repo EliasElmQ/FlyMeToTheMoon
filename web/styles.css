@@ -115,6 +115,10 @@ html, body {
   width: 68px;
 }
 
+#instrumentSelect {
+  max-width: 175px;
+}
+
 .vol-field input[type="range"] {
   width: 72px;
 }

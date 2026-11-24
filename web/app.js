@@ -8,7 +8,7 @@ import { MidiManager, parseMidiFile, parseScoreText, computeScoreStats } from ".
 import { OpenSpaceLink } from "./openspace_link.js";
 import { PianoView } from "./piano_view.js";
 import { PlaybackController } from "./player.js";
-import { PianoSynth } from "./synth.js";
+import { PianoSynth, INSTRUMENTS } from "./synth.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -84,6 +84,7 @@ class App {
     });
 
     this.populateSongs();
+    this.populateInstruments();
     this.buildLayerMatrix();
     this.bindUI();
     this.syncConfigToUI();
@@ -219,6 +220,36 @@ class App {
       opt.textContent = name.replace(/\.score$/, "");
       sel.appendChild(opt);
     }
+  }
+
+  populateInstruments() {
+    const sel = $("instrumentSelect");
+    if (!sel) return;
+    sel.innerHTML = "";
+    for (const inst of INSTRUMENTS) {
+      const opt = document.createElement("option");
+      opt.value = inst.id;
+      opt.textContent = `${inst.name} (${inst.category})`;
+      sel.appendChild(opt);
+    }
+    sel.value = this.synth.instrument;
+    const active = INSTRUMENTS.find((i) => i.id === this.synth.instrument) || INSTRUMENTS[0];
+    this.syncSynthUIToPreset(active);
+  }
+
+  syncSynthUIToPreset(preset) {
+    if (!preset) return;
+    const setSlider = (inputId, valId, value) => {
+      $(inputId).value = value;
+      $(valId).textContent = Number(value).toFixed(2);
+    };
+    setSlider("synBodyMix", "valBodyMix", this.synth.bodyMix);
+    setSlider("synC1", "valC1", this.synth.c1Scale);
+    setSlider("synC3", "valC3", this.synth.c3Scale);
+    setSlider("synPos", "valPos", this.synth.pos);
+    setSlider("synDetune", "valDetune", this.synth.detune);
+    const badge = $("activeVoiceBadge");
+    if (badge) badge.textContent = preset.name;
   }
 
   renderMidiDevices(devices) {
@@ -496,8 +527,6 @@ class App {
       this.synth.setTimbre({ volume: Number(e.target.value) });
     });
 
-    $("panicBtn").addEventListener("click", () => this.panic());
-
     // Sustain pedal button (toggle)
     $("pedalBtn").addEventListener("click", () => {
       this.synth.resume();
@@ -513,9 +542,15 @@ class App {
       btn.addEventListener("click", () => {
         this.bridge.applyModePreset(btn.dataset.mode);
         this.syncConfigToUI();
-        if (this.link.connected && this.bridge.config.camera && !this.bridge.config.dryRun) {
-          this.bridge.setRetarget(this.bridge.config.retargetTime);
-          if (this.bridge.config.layers && this.bridge.tourStops.length === 0) {
+        if (this.link.connected && !this.bridge.config.dryRun) {
+          if (this.bridge.config.camera) {
+            this.bridge.setRetarget(this.bridge.config.retargetTime);
+          }
+          if (
+            !this.bridge.probing &&
+            ((this.bridge.config.layers && !this.bridge.layersProbed) ||
+              (this.bridge.config.camera && this.bridge.config.tour && this.bridge.tourStops.length === 0))
+          ) {
             this.bridge.probe();
           }
         }
@@ -532,6 +567,15 @@ class App {
     });
     $("cfgLayers").addEventListener("change", (e) => {
       this.bridge.config.layers = e.target.checked;
+      if (
+        e.target.checked &&
+        this.link.connected &&
+        !this.bridge.config.dryRun &&
+        !this.bridge.layersProbed &&
+        !this.bridge.probing
+      ) {
+        this.bridge.probe();
+      }
     });
     $("cfgSizes").addEventListener("change", (e) => {
       this.bridge.config.noSizes = !e.target.checked;
@@ -684,7 +728,13 @@ class App {
       if (file) this.handleFileImport(file);
     });
 
-    // Synth timbre sliders
+    // Instrument voice selection & synth timbre sliders
+    $("instrumentSelect").addEventListener("change", (e) => {
+      this.synth.resume();
+      const preset = this.synth.setInstrument(e.target.value, true);
+      this.syncSynthUIToPreset(preset);
+      this.log("info", `Voice switched to ${preset.name}`);
+    });
     const bindSynth = (inputId, valId, prop) => {
       $(inputId).addEventListener("input", (e) => {
         const v = Number(e.target.value);

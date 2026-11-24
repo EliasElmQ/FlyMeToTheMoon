@@ -173,7 +173,7 @@ export class OpenSpaceBridge {
     this.layerLive = new Map();
     for (const l of LAYERS) {
       this.layerUri.set(l.name, l.uri);
-      this.layerLive.set(l.name, true);
+      this.layerLive.set(l.name, false);
     }
     this.layerEnabled = new Map();
 
@@ -253,6 +253,8 @@ export class OpenSpaceBridge {
     this.netEfolds = 0.0;
 
     this.probing = false;
+    this.probed = false;
+    this.layersProbed = false;
     this._settingUpTime = false;
     this._sortedLayers = [...LAYERS].sort((a, b) => a.rank - b.rank);
   }
@@ -307,6 +309,14 @@ export class OpenSpaceBridge {
    * Reset transient connection/probe caches before a new probe.
    */
   resetForConnect() {
+    this.probed = false;
+    this.layersProbed = false;
+    for (const l of LAYERS) {
+      this.layerLive.set(l.name, false);
+    }
+    this.sizeBase.clear();
+    this.opacityLive.clear();
+    this.bodies.clear();
     this.lastLayer.clear();
     this.lastScalar.clear();
     this.lastSize.clear();
@@ -329,74 +339,83 @@ export class OpenSpaceBridge {
     if (this.probing) return;
     this.probing = true;
     try {
-      const a = this.config;
-      if (a.dryRun || a.noProbe) {
-        for (const [oscName, uris, lo, hi] of SCALARS) {
-          this.scalarUri.set(oscName, uris[0]);
-          this.scalarRange.set(oscName, [lo, hi]);
-        }
-        for (const l of LAYERS) {
-          this.layerLive.set(l.name, true);
-        }
-        this.bodies = new Set([...TOUR, TOUR_FINAL, ...Object.values(PITCH_BODY).filter((b) => b !== OUTWARD)]);
-        this.tourStops = a.camera && a.tour ? [...TOUR] : [];
-        this.timeLive = Boolean(a.time);
-        this.onLog("info", `Dry-run / no-probe active: all ${LAYERS.length} layers and tour bodies enabled`);
-        return;
+      await this._probeInner();
+      if (this.link.connected || this.config.dryRun) {
+        this.probed = true;
       }
+    } finally {
+      this.probing = false;
+    }
+  }
 
-      if (!a.layers) {
-        for (const l of LAYERS) {
-          this.layerLive.set(l.name, false);
-        }
-        this.onLog("info", "layers disabled -- leaving scene renderables as they are");
-        if (!a.keepLabels) await this.hideText();
-        if (a.camera && a.retargetTime !== null && a.retargetTime !== undefined) {
-          await this.setRetarget(a.retargetTime);
-        }
-        if (a.time) await this.setupTime();
-        if (!a.camera) {
-          this.onLog("info", "camera movement disabled");
-          this.tourStops = [];
-          return;
-        }
-      } else {
-        await this.probeLayers();
-        if (!this.link.connected) return;
-        if (!a.keepLabels) await this.hideText();
-        if (!a.noSizes) await this.readSizeBaselines();
-        if (a.camera && a.retargetTime !== null && a.retargetTime !== undefined) {
-          await this.setRetarget(a.retargetTime);
-        }
-        if (a.time) await this.setupTime();
+  async _probeInner() {
+    const a = this.config;
+    if (a.dryRun || a.noProbe) {
+      for (const [oscName, uris, lo, hi] of SCALARS) {
+        this.scalarUri.set(oscName, uris[0]);
+        this.scalarRange.set(oscName, [lo, hi]);
       }
+      for (const l of LAYERS) {
+        this.layerLive.set(l.name, true);
+      }
+      this.layersProbed = true;
+      this.bodies = new Set([...TOUR, TOUR_FINAL, ...Object.values(PITCH_BODY).filter((b) => b !== OUTWARD)]);
+      this.tourStops = a.camera && a.tour ? [...TOUR] : [];
+      this.timeLive = Boolean(a.time);
+      this.onLog("info", `Dry-run / no-probe active: all ${LAYERS.length} layers and tour bodies enabled`);
+      return;
+    }
 
+    if (!a.layers) {
+      for (const l of LAYERS) {
+        this.layerLive.set(l.name, false);
+      }
+      this.onLog("info", "layers disabled -- leaving scene renderables as they are");
+      if (!a.keepLabels) await this.hideText();
+      if (a.camera && a.retargetTime !== null && a.retargetTime !== undefined) {
+        await this.setRetarget(a.retargetTime);
+      }
+      if (a.time) await this.setupTime();
       if (!a.camera) {
         this.onLog("info", "camera movement disabled");
         this.tourStops = [];
         return;
       }
+    } else {
+      await this.probeLayers();
+      if (!this.link.connected) return;
+      this.layersProbed = true;
+      if (!a.keepLabels) await this.hideText();
+      if (!a.noSizes) await this.readSizeBaselines();
+      if (a.camera && a.retargetTime !== null && a.retargetTime !== undefined) {
+        await this.setRetarget(a.retargetTime);
+      }
+      if (a.time) await this.setupTime();
+    }
 
-      for (const [oscName, uris, lo, hi] of SCALARS) {
-        let found = false;
-        for (const uri of uris) {
-          const n = await this.link.ask(`return #openspace.property(${luaStr(uri)})`);
-          if (n && n > 0) {
-            this.scalarUri.set(oscName, uri);
-            this.scalarRange.set(oscName, [lo, hi]);
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          this.onLog("warn", `no property found for '${oscName}' -- mapping skipped`);
+    if (!a.camera) {
+      this.onLog("info", "camera movement disabled");
+      this.tourStops = [];
+      return;
+    }
+
+    for (const [oscName, uris, lo, hi] of SCALARS) {
+      let found = false;
+      for (const uri of uris) {
+        const n = await this.link.ask(`return #openspace.property(${luaStr(uri)})`);
+        if (n && n > 0) {
+          this.scalarUri.set(oscName, uri);
+          this.scalarRange.set(oscName, [lo, hi]);
+          found = true;
+          break;
         }
       }
-
-      await this.probeTourBodies();
-    } finally {
-      this.probing = false;
+      if (!found) {
+        this.onLog("warn", `no property found for '${oscName}' -- mapping skipped`);
+      }
     }
+
+    await this.probeTourBodies();
   }
 
   async probeLayers() {
@@ -1096,7 +1115,10 @@ export class OpenSpaceBridge {
       }
     }
 
-    if (!this.link.connected) return;
+    if (!this.link.connected || this.probing || !this.probed) {
+      this.notes.length = 0;
+      return;
+    }
 
     // Handle runtime enabling of time driving if connected after initial probe.
     if (this.config.time && !this.timeLive && !this.probing && !this._settingUpTime) {
@@ -1385,7 +1407,9 @@ export class OpenSpaceBridge {
     for (const v of this.layerLive.values()) if (v) liveCount++;
 
     let state;
-    if (!this.hasInput) {
+    if (this.probing) {
+      state = "probing OpenSpace scene...";
+    } else if (!this.hasInput) {
       state = "waiting for notes";
     } else if (!this.link.connected) {
       state = "OpenSpace offline";

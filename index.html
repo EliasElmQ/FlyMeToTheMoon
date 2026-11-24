@@ -43,12 +43,15 @@
           </select>
         </label>
         <button id="midiRefreshBtn" class="btn btn-ghost" title="Rescan MIDI devices">Scan</button>
-        <button id="audioMuteBtn" class="btn btn-ghost" title="Toggle built-in Web Audio piano">Sound: On</button>
+        <label class="field-inline" title="Select Web Audio instrument voice">
+          <span>Voice</span>
+          <select id="instrumentSelect"></select>
+        </label>
+        <button id="audioMuteBtn" class="btn btn-ghost" title="Toggle built-in Web Audio synth">Sound: On</button>
         <label class="field-inline vol-field" title="Master Synth Volume">
           <span>Vol</span>
           <input id="audioVol" type="range" min="0" max="1.2" step="0.02" value="0.8" />
         </label>
-        <button id="panicBtn" class="btn btn-danger" title="Silence all voices and reset analyzer">Panic</button>
       </div>
     </header>
 
@@ -272,11 +275,14 @@
       <!-- Column 3: Synth Timbre & Activity Log -->
       <section class="card control-card">
         <div class="card-head">
-          <h2>Piano Synth &amp; Log</h2>
+          <h2>Synth &amp; Log</h2>
         </div>
 
         <div class="subpanel">
-          <h3>Web Audio Piano Voice</h3>
+          <div class="subpanel-head">
+            <h3>Web Audio Voice</h3>
+            <span id="activeVoiceBadge" class="badge">Acoustic Piano</span>
+          </div>
           <div class="synth-sliders">
             <label class="slider-item">
               <span>Room Mix <em id="valBodyMix">0.20</em></span>
